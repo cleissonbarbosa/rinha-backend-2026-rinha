@@ -1,0 +1,21 @@
+# =============================================================================
+# Load balancer em Rinha
+#
+# Executa o programa Rinha com o interpretador compilado localmente e o AST
+# precompilado em `build/lb.json` pelo ambiente local.
+# =============================================================================
+
+FROM debian:bookworm-slim
+WORKDIR /app
+COPY build/rinha-interp /app/rinha-interp
+COPY build/lb.json      /app/lb.json
+COPY rinha/lb.rinha     /app/lb.rinha
+RUN chmod +x /app/rinha-interp
+
+ENV LB_ADDR=0.0.0.0:9999 \
+    BACKEND1=api1:8080 \
+    BACKEND2=api2:8080 \
+    RINHA_NET_MAX_THREADS=256
+
+EXPOSE 9999
+ENTRYPOINT ["/app/rinha-interp", "+RTS", "-N1", "-A128k", "-F1.1", "-RTS", "/app/lb.json"]

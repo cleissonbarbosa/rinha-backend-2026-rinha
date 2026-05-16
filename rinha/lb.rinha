@@ -1,0 +1,61 @@
+// =============================================================================
+// Rinha de Backend 2026 - load balancer TCP em linguagem Rinha
+//
+// A politica fica aqui: accept loop, round-robin entre BACKEND1/BACKEND2,
+// fallback quando o backend escolhido nao conecta, relay bidirecional e
+// fechamento dos sockets.
+// =============================================================================
+
+let backend1 = env("BACKEND1", "api1:8080");
+let backend2 = env("BACKEND2", "api2:8080");
+let listenAddr = env("LB_ADDR", "0.0.0.0:9999");
+let cursor = counter_new(0);
+let chunkSize = env_int("LB_CHUNK_SIZE", 8192);
+
+let relay = fn (src, dst) => {
+  let chunk = net_recv(src, chunkSize);
+  if (str_len(chunk) == 0) {
+    net_shutdown(dst, 1)
+  } else {
+    let sent = net_send(dst, chunk);
+    relay(src, dst)
+  }
+};
+
+let proxySockets = fn (client, backend) => {
+  let upstream = spawn(fn () => { relay(client, backend) });
+  let downstream = relay(backend, client);
+  let closedBackend = net_close(backend);
+  net_close(client)
+};
+
+let useBackend = fn (client, primary, fallback) => {
+  let firstTry = net_connect_addr(primary);
+  if (first(firstTry) == 1) {
+    let backend = second(firstTry);
+    proxySockets(client, backend)
+  } else {
+    let secondTry = net_connect_addr(fallback);
+    if (first(secondTry) == 1) {
+      let backend = second(secondTry);
+      proxySockets(client, backend)
+    } else {
+      net_close(client)
+    }
+  }
+};
+
+let handleClient = fn (client) => {
+  let turn = counter_next(cursor);
+  let parity = turn - (turn / 2) * 2;
+  let target = if (parity == 0) {
+    record { primary: backend1, fallback: backend2 }
+  } else {
+    record { primary: backend2, fallback: backend1 }
+  };
+  useBackend(client, target.primary, target.fallback)
+};
+
+let listener = net_listen_addr(listenAddr);
+let boot = print("rinha lb em " + listenAddr + " -> " + backend1 + ", " + backend2);
+net_serve(listener, handleClient)

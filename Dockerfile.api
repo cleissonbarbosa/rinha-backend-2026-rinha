@@ -1,0 +1,25 @@
+# =============================================================================
+# API - Rinha de Backend 2026 (linguagem Rinha)
+#
+# Imagem com o interpretador compilado localmente e os ASTs precompilados
+# em `build/*.json` pelo ambiente local.
+# =============================================================================
+
+# --- imagem final ------------------------------------------------------------
+FROM debian:bookworm-slim
+
+WORKDIR /app
+COPY build/rinha-interp /app/rinha-interp
+COPY build/server.json  /app/server.json
+COPY rinha/server.rinha /app/server.rinha
+COPY resources          /app/resources
+RUN chmod +x /app/rinha-interp
+
+ENV API_ADDR=0.0.0.0:8080 \
+    RESOURCES_DIR=/app/resources \
+    KNN_CANDIDATES=128 \
+    RINHA_PROBE=3 \
+    RINHA_NET_MAX_THREADS=256
+
+EXPOSE 8080
+ENTRYPOINT ["/app/rinha-interp", "+RTS", "-N1", "-A128k", "-F1.1", "-RTS", "/app/server.json"]
