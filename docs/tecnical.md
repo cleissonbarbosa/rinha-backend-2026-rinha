@@ -1,6 +1,6 @@
-# Documentacao tecnica
+# Documentação técnica
 
-Este documento descreve a arquitetura da solucao em Rinha, o caminho quente de uma requisicao e os pontos que dependem do interpretador estendido. O objetivo do projeto e manter a aplicacao e o load balancer em Rinha, usando builtins nativos somente para operacoes que a linguagem original nao oferece.
+Este documento descreve a arquitetura da solução em [Rinha](https://github.com/cleissonbarbosa/rinha-de-compiler/blob/main/SPECS.md), o hot path de uma requisição e os pontos que dependem do meu [interpretador Haskell](https://github.com/cleissonbarbosa/rinha-compiladores-haskell). O objetivo do projeto é manter a aplicação e o load balancer em Rinha, usando builtins nativos apenas para operações que a linguagem original não oferece.
 
 ## Topologia
 
@@ -13,9 +13,9 @@ flowchart LR
   api2 --> data
 ```
 
-O `docker-compose.yml` usa duas APIs e um load balancer dentro do limite de 1 CPU. O volume nomeado `sockets` e um `tmpfs` compartilhado entre os containers; nele as APIs publicam os sockets Unix usados para receber descritores de arquivo.
+O `docker-compose.yml` sobe duas APIs e um load balancer dentro do limite de 1 CPU. O volume `sockets` é um `tmpfs` compartilhado; nele as APIs expõem sockets Unix para receber descritores via SCM_RIGHTS.
 
-## Fluxo da requisicao
+## Fluxo da requisição
 
 ```mermaid
 sequenceDiagram
@@ -38,84 +38,84 @@ sequenceDiagram
   A-->>C: HTTP 200 precomputado
 ```
 
-No caminho principal o LB nao faz relay de bytes depois do handoff: ele aceita a conexao, envia o fd aceito para uma API e fecha a sua copia local. A API passa a ler e escrever diretamente no socket do cliente.
+Fluxo resumido: o LB aceita a conexão, encaminha o descritor de arquivo (fd) para uma API e fecha sua cópia local — sem relayer de bytes. A API passa a ler/escrever diretamente no socket do cliente.
 
-O codigo do LB tambem tem fallback por proxy TCP usando `net_connect_addr` e `net_proxy`. Esse modo e util quando as APIs rodam sem `API_FD_SOCKET`; no compose atual, o caminho esperado e o handoff por fd.
+Observação prática: o LB também tem fallback por proxy TCP (`net_connect_addr` + `net_proxy`) — útil ao executar as APIs sem `API_FD_SOCKET`. No compose padrão, o handoff por fd é o caminho preferencial.
 
 ## Endpoints
 
-| Metodo | Rota | Resposta |
+| Método | Rota | Resposta |
 | --- | --- | --- |
-| `GET` | `/ready` | `{"ready":true}` depois do warmup do indice |
+| `GET` | `/ready` | `{"ready":true}` depois do warmup do índice |
 | `POST` | `/fraud-score` | `{"approved":bool,"fraud_score":float}` |
 
-A aprovacao e derivada do numero de fraudes nos 5 vizinhos: scores `0`, `1` e `2` aprovam; `3`, `4` e `5` reprovam.
+A aprovação vem da contagem de fraudes entre os 5 vizinhos: `0..2` → aprovado; `3..5` → reprovado.
 
 ## Hot path da API
 
-1. `ivf_warmup()` e chamado no boot para preparar os arquivos do indice.
-2. `net_fd_serve` entrega para `serveConn` cada fd recebido do LB.
-3. `readReq` acumula bytes ate `http_parse_request` devolver uma requisicao completa.
-4. `route` valida metodo e rota e chama `classify` para `/fraud-score`.
-5. `classify` delega o corpo bruto para `fraud_count_json`.
-6. `respScore` seleciona uma das seis respostas HTTP precomputadas.
+1. `ivf_warmup()` roda na inicialização para preparar os arquivos do índice.
+2. `net_fd_serve` entrega a `serveConn` cada descritor (fd) recebido do LB.
+3. `readReq` acumula bytes até que `http_parse_request` retorne uma requisição completa.
+4. `route` valida método/rota e invoca `classify` para `/fraud-score`.
+5. `classify` repassa o corpo bruto para `fraud_count_json`.
+6. `respScore` escolhe uma das seis respostas HTTP pré-geradas.
 7. `serveConn` reaproveita `p.rest` para keep-alive e pipelining.
 
-O parse HTTP fica em builtin para evitar reescanear strings grandes no interpretador. O score tambem esta em builtin: ele parseia o JSON, normaliza a transacao, consulta o IVF e devolve apenas a contagem de fraudes `0..5` para o programa Rinha.
+Técnica: o parser HTTP é nativo (builtin) para evitar reanalisar buffers grandes no interpretador. O score também é nativo: analisa o JSON, normaliza a transação, consulta o IVF e retorna apenas `fraud_count` (0..5) para o programa Rinha.
 
 ## Builtins do runtime
 
-A linguagem Rinha original expoe basicamente `Print`. Este projeto depende de uma branch estendida do interpretador Haskell com primitivos de baixo nivel:
+A linguagem Rinha original expõe apenas `Print`. Aqui usamos uma branch estendida do interpretador Haskell com primitivos de baixo nível:
 
 | Builtin | Papel |
 | --- | --- |
-| `env`, `env_int` | leitura de variaveis de ambiente |
-| `str_*` | operacoes byte-oriented em strings usadas pelo codigo Rinha |
-| `net_listen_addr`, `net_serve` | listener TCP e accept loop |
+| `env`, `env_int` | leitura de variáveis de ambiente |
+| `str_*` | operações byte-oriented em strings do código Rinha |
+| `net_listen_addr`, `net_serve` | listener TCP e loop de accept |
 | `net_fd_listen`, `net_fd_serve` | listener Unix para receber fds via `SCM_RIGHTS` |
 | `net_fd_send_addr` | envio de fd aceito para uma API |
 | `net_connect_addr`, `net_recv`, `net_send`, `net_close` | I/O de socket cru |
 | `net_proxy` | relay bidirecional nativo para fallback TCP |
-| `counter_new`, `counter_next` | contador atomico usado no round-robin |
-| `ivf_warmup`, `ivf_query` | inicializacao e consulta do indice vetorial |
+| `counter_new`, `counter_next` | contador atômico para round-robin |
+| `ivf_warmup`, `ivf_query` | inicialização e consulta do índice vetorial |
 | `http_parse_request` | request line, headers, `Content-Length`, body e bytes restantes |
-| `fraud_count_json` | parse JSON, vetorizacao, consulta kNN e voto final |
+| `fraud_count_json` | análise JSON, vetorização, consulta kNN e decisão por voto |
 
 Nao ha framework HTTP dentro do runtime. O programa Rinha ainda decide rota, status, corpo e politica de keep-alive.
 
-## Recursos binarios
+## Recursos binários
 
-O container da API copia `resources/` para `/app/resources` e usa `RESOURCES_DIR` para localizar os arquivos:
+O container copia `resources/` para `/app/resources` e usa `RESOURCES_DIR`:
 
-| Arquivo | Conteudo |
+| Arquivo | Conteúdo |
 | --- | --- |
-| `vectors.bin` | matriz quantizada de vetores de referencia, aproximadamente 84 MB |
-| `labels.bin` | label fraude/legitimo, 1 byte por vetor |
-| `residuals.bin` | ajuste usado no refinamento do score, aproximadamente 42 MB |
-| `ivf.bin` | metadados, centroides e boundaries dos clusters IVF |
+| `vectors.bin` | matriz quantizada de vetores de referência (~84 MB) |
+| `labels.bin` | label fraude/legítimo (1 byte por vetor) |
+| `residuals.bin` | ajuste para refinamento do score (~42 MB) |
+| `ivf.bin` | metadados, centroides e limites dos clusters |
 | `normalization.json` | limites e escalas das features |
 | `mcc_risk.json` | risco base por MCC |
 
-Cada API carrega e aquece o indice no startup. Depois disso, o request path nao deve reler nem parsear esses arquivos.
+Cada API carrega e aquece o índice na inicialização; durante o atendimento não se releem nem reanalisam esses arquivos.
 
-## Vetorizacao e score
+## Vetorização e score
 
-O builtin `fraud_count_json` transforma a transacao em um vetor de 14 dimensoes compativel com o indice:
+`fraud_count_json` transforma a transação em um vetor de 14 dimensões:
 
-1. valor da transacao;
-2. numero de parcelas;
-3. relacao entre `amount` e media historica do cliente;
+1. valor da transação;
+2. número de parcelas;
+3. relação entre `amount` e média histórica do cliente;
 4. hora do dia;
 5. dia da semana;
-6. minutos desde a ultima transacao;
-7. distancia da ultima transacao;
-8. distancia da casa;
-9. transacoes nas ultimas 24h;
+6. minutos desde a última transação;
+7. distância da última transação;
+8. distância da casa;
+9. transações nas últimas 24h;
 10. flag `is_online`;
 11. flag `card_present`;
 12. merchant desconhecido para o cliente;
 13. risco do MCC;
-14. media historica do merchant.
+14. média histórica do merchant.
 
 O resultado final e `fraud_count`, isto e, quantos dos 5 vizinhos mais proximos sao fraude. A API mapeia essa contagem diretamente para uma resposta estatica:
 
@@ -130,52 +130,42 @@ O resultado final e `fraud_count`, isto e, quantos dos 5 vizinhos mais proximos 
 
 ## Build e imagens
 
-`make rinha-check` faz tres coisas:
+`make rinha-check`:
 
 1. gera `build/server.json` a partir de `rinha/server.rinha`;
 2. gera `build/lb.json` a partir de `rinha/lb.rinha`;
-3. compila o interpretador Haskell local e copia o binario para `build/rinha-interp`.
+3. compila o interpretador Haskell local e copia o binário para `build/rinha-interp`.
 
-As imagens Docker sao finais e simples: copiam o runtime, o AST JSON ja precompilado e os arquivos de recursos. Nao ha compilacao de Rinha dentro do container de runtime.
+As imagens Docker finalizadas simplesmente copiam o runtime, o AST JSON pré-compilado e os recursos; não há compilação de Rinha dentro do container.
 
-## Variaveis da API
+## Variáveis da API
 
-| Variavel | Padrao | Descricao |
+| Variável | Padrão | Descrição |
 | --- | --- | --- |
-| `API_ADDR` | `0.0.0.0:8080` | endereco TCP usado quando `API_FD_SOCKET` esta vazio |
-| `API_FD_SOCKET` | vazio | socket Unix usado para receber conexoes aceitas pelo LB |
-| `RESOURCES_DIR` | `/app/resources` | diretorio dos arquivos `resources/*` |
-| `KNN_CANDIDATES` | `128` | candidatos considerados pelo score nativo |
-| `RINHA_PROBE` | `3` no compose | clusters IVF sondados por consulta |
+| `API_ADDR` | `0.0.0.0:8080` | endereço TCP se `API_FD_SOCKET` estiver vazio |
+| `API_FD_SOCKET` | vazio | socket Unix para receber conexões via handoff |
+| `RESOURCES_DIR` | `/app/resources` | diretório dos recursos |
+| `KNN_CANDIDATES` | `128` | candidatos considerados pelo KNN nativo |
+| `RINHA_PROBE` | `3` no compose | número de clusters IVF sondados |
 | `RINHA_RESIDUAL_REFINE` | `1` | habilita refinamento com `residuals.bin` |
-| `RINHA_NET_MAX_THREADS` | `512` | limite de threads/conexoes do runtime nativo |
+| `RINHA_NET_MAX_THREADS` | `512` | limite de threads/conexões no runtime nativo |
 
-## Variaveis do LB
+## Variáveis do LB
 
-| Variavel | Padrao | Descricao |
+| Variável | Padrão | Descrição |
 | --- | --- | --- |
-| `LB_ADDR` | `0.0.0.0:9999` | endereco publico do load balancer |
-| `BACKEND1` | `api1:8080` | backend TCP primario da API 1 para fallback |
-| `BACKEND2` | `api2:8080` | backend TCP primario da API 2 para fallback |
-| `FD_BACKEND1` | vazio | socket Unix da API 1 para handoff por fd |
-| `FD_BACKEND2` | vazio | socket Unix da API 2 para handoff por fd |
-| `LB_CHUNK_SIZE` | `65536` | tamanho do buffer do fallback `net_proxy` |
-| `RINHA_NET_MAX_THREADS` | `512` | limite de threads/conexoes do runtime nativo |
+| `LB_ADDR` | `0.0.0.0:9999` | endereço público do LB |
+| `BACKEND1` | `api1:8080` | backend TCP da API 1 (fallback) |
+| `BACKEND2` | `api2:8080` | backend TCP da API 2 (fallback) |
+| `FD_BACKEND1` | vazio | socket Unix da API 1 para handoff |
+| `FD_BACKEND2` | vazio | socket Unix da API 2 para handoff |
+| `LB_CHUNK_SIZE` | `65536` | buffer do fallback `net_proxy` |
+| `RINHA_NET_MAX_THREADS` | `512` | limite de threads/conexões |
 
-## Testes
+## Limites e observações
 
-```sh
-make smoke           # sobe compose e valida /ready + /fraud-score
-make official-smoke  # executa test/smoke.js do repositorio oficial
-make official-test   # executa test/test.js do repositorio oficial e imprime results.json
-```
+- Depende do meu [interpretador Haskell](https://github.com/cleissonbarbosa/rinha-compiladores-haskell) da [Rinha de Compiladores](https://github.com/aripiprazole/rinha-de-compiler); a linguagem original não tem sockets, `env`, bytes de string nem acesso a arquivos de índice.
+- Usei builtins nativos para parse HTTP e score; a casca HTTP, roteamento e resposta ficam em Rinha.
+- O score nativo reexecuta parse, normalização e consulta por requisição; não há cache por transação.
+- Com `API_FD_SOCKET` definido, a API recebe fds via Unix socket. Para testar fallback TCP, rode a API sem essa variável.
 
-`scripts/official-test.sh` clona `zanfranceschi/rinha-de-backend-2026` em `../rinha-de-backend-2026` caso o repositorio oficial ainda nao exista.
-
-## Limites honestos do port
-
-- O projeto depende de um interpretador Rinha estendido; a linguagem original nao tem sockets, env, bytes de string nem acesso a arquivos de indice.
-- O caminho atual usa builtins nativos para parse HTTP e score. A casca HTTP, o roteamento, o balanceamento e a resposta continuam em Rinha.
-- O score nativo recalcula parse, normalizacao e consulta para cada request; nao ha cache de resultado por transacao.
-- Com `API_FD_SOCKET` definido, a API serve fds recebidos via Unix socket. Para testar o fallback TCP puro, rode a API sem essa variavel.
-- O runtime continua sendo um interpretador tree-walking em Haskell. O objetivo aqui e o port para Rinha, nao competir com uma implementacao nativa em Rust/C no mesmo custo de CPU.
