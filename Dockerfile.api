@@ -19,7 +19,9 @@ ENV API_ADDR=0.0.0.0:8080 \
     RESOURCES_DIR=/app/resources \
     KNN_CANDIDATES=128 \
     RINHA_PROBE=3 \
-    RINHA_NET_MAX_THREADS=256
+    RINHA_NET_MAX_THREADS=512
 
 EXPOSE 8080
-ENTRYPOINT ["/app/rinha-interp", "+RTS", "-N1", "-A128k", "-F1.1", "-RTS", "/app/server.json"]
+# -A16m: nursery grande - o interpretador aloca um Map por chamada de funcao;
+# com -A128k o GC disparava a cada 128KB e estrangulava o caminho quente.
+ENTRYPOINT ["/app/rinha-interp", "+RTS", "-N1", "-A16m", "-I0", "-RTS", "/app/server.json"]

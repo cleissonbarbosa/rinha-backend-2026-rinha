@@ -1,15 +1,17 @@
 // =============================================================================
 // Rinha de Backend 2026 - API completa escrita na linguagem Rinha
 //
-// Tudo o que e logica de aplicacao roda aqui, em Rinha:
-//   - parsing da request HTTP (request line, Content-Length, corpo)
+// Toda a logica de aplicacao roda aqui, em Rinha:
+//   - parsing da request HTTP (request line, corpo apos CRLFCRLF)
 //   - parsing do JSON da transacao
-//   - heuristica rapida de fraude para manter a API abaixo do timeout oficial
+//   - vetorizacao: as 14 dimensoes normalizadas e quantizadas (escala 32767)
+//   - voto kNN sobre os 5 vizinhos devolvidos pelo indice nativo
 //   - montagem da resposta HTTP
 //
-// O interpretador so expoe primitivos de verdade: sockets crus (net_*),
-// bytes de string (str_*), variaveis de ambiente (env*) e utilitarios nativos
-// genericos como o indice vetorial.
+// O interpretador so expoe primitivos de baixo nivel: sockets crus (net_*),
+// bytes de string (str_*), variaveis de ambiente (env*) e o indice vetorial
+// (`ivf_warmup`/`ivf_query`) - este apenas RECUPERA os 5 vizinhos mais proximos
+// do conjunto de referencia; a vetorizacao e o voto continuam aqui em Rinha.
 // =============================================================================
 
 // ---- bytes uteis -----------------------------------------------------------
@@ -18,77 +20,10 @@ let cr   = str_byte(13);
 let lf   = str_byte(10);
 let crlf = cr + lf;
 
-// ---- listas (mesma representacao do str_chars: (1,(h,t)) p/ cons, (0,0) p/ nil)
-let nil   = (0, 0);
+// ---- listas (representacao do str_chars: (1,(h,t)) cons, (0,0) nil) --------
 let isNil = fn (l) => { first(l) == 0 };
 let hd    = fn (l) => { first(second(l)) };
 let tl    = fn (l) => { second(second(l)) };
-let cons  = fn (h, t) => { (1, (h, t)) };
-
-let takeN = fn (n, l) => {
-  if (n == 0) { nil }
-  else { if (isNil(l)) { nil } else { cons(hd(l), takeN(n - 1, tl(l))) } }
-};
-let dropN = fn (n, l) => {
-  if (n == 0) { l }
-  else { if (isNil(l)) { l } else { dropN(n - 1, tl(l)) } }
-};
-let takeUntil = fn (c, l) => {
-  if (isNil(l)) { nil }
-  else { if (hd(l) == c) { nil } else { cons(hd(l), takeUntil(c, tl(l))) } }
-};
-let dropUntil = fn (c, l) => {
-  if (isNil(l)) { l }
-  else { if (hd(l) == c) { l } else { dropUntil(c, tl(l)) } }
-};
-
-// ---- helpers de string/char ------------------------------------------------
-let isWs = fn (c) => {
-  if (c == 32) { 1 } else { if (c == 9) { 1 } else {
-  if (c == 10) { 1 } else { if (c == 13) { 1 } else { 0 } } } }
-};
-let skipWs = fn (l) => {
-  if (isNil(l)) { l }
-  else { if (isWs(hd(l)) == 1) { skipWs(tl(l)) } else { l } }
-};
-
-// matchPrefix: tenta casar `needle` no inicio de `hay`; devolve { ok, rest }
-let matchPrefix = fn (hay, needle) => {
-  if (isNil(needle)) { record { ok: 1, rest: hay } }
-  else { if (isNil(hay)) { record { ok: 0, rest: hay } }
-    else { if (hd(hay) == hd(needle)) { matchPrefix(tl(hay), tl(needle)) }
-      else { record { ok: 0, rest: hay } } } }
-};
-// findAfter: sufixo logo apos a 1a ocorrencia de `needle`, ou nil se ausente
-let findAfter = fn (hay, needle) => {
-  if (isNil(hay)) { nil }
-  else { let m = matchPrefix(hay, needle);
-    if (m.ok == 1) { m.rest } else { findAfter(tl(hay), needle) } }
-};
-// contains: 1 se `needle` aparece em `hay`, senao 0
-let contains = fn (hay, needle) => {
-  if (isNil(needle)) { 1 }
-  else { if (isNil(hay)) { 0 }
-    else { let m = matchPrefix(hay, needle);
-      if (m.ok == 1) { 1 } else { contains(tl(hay), needle) } } }
-};
-// listEq: 1 se as duas listas sao identicas
-let listEq = fn (a, b) => {
-  let m = matchPrefix(a, b);
-  if (m.ok == 1) { if (isNil(m.rest)) { 1 } else { 0 } } else { 0 }
-};
-let toLower1 = fn (c) => { if (c >= 65) { if (c <= 90) { c + 32 } else { c } } else { c } };
-let toLower  = fn (l) => { if (isNil(l)) { l } else { cons(toLower1(hd(l)), toLower(tl(l))) } };
-
-let charAt  = fn (l, i) => {
-  if (isNil(l)) { 0 } else { if (i == 0) { hd(l) } else { charAt(tl(l), i - 1) } }
-};
-let digit1  = fn (c) => { if (c >= 48) { if (c <= 57) { c - 48 } else { 0 } } else { 0 } };
-let digitAt = fn (l, i) => { digit1(charAt(l, i)) };
-let int2 = fn (l, i) => { digitAt(l, i) * 10 + digitAt(l, i + 1) };
-let int4 = fn (l, i) => {
-  digitAt(l, i) * 1000 + digitAt(l, i + 1) * 100 + digitAt(l, i + 2) * 10 + digitAt(l, i + 3)
-};
 
 // ---- numeros ---------------------------------------------------------------
 let pow10 = fn (n) => { if (n <= 0) { 1 } else { 10 * pow10(n - 1) } };
@@ -100,7 +35,7 @@ let readDigits = fn (l, acc, n) => {
       else { record { val: acc, rest: l, n: n } } }
     else { record { val: acc, rest: l, n: n } } }
 };
-// readFrac: le ate 6 digitos da parte fracionaria e devolve em micros
+// readFrac: le ate 6 digitos da parte fracionaria, devolve em micros
 let readFrac = fn (l, acc, count) => {
   if (isNil(l)) { acc * pow10(6 - count) }
   else { let c = hd(l);
@@ -110,8 +45,8 @@ let readFrac = fn (l, acc, count) => {
       else { acc * pow10(6 - count) } }
     else { acc * pow10(6 - count) } }
 };
-// parseNum: `l` posicionado no valor; devolve o numero em micros (valor * 1e6),
-//           ou `fallback` se nao houver digito algum
+// parseNum: lista posicionada no valor -> numero em micros (valor * 1e6),
+//           truncando a parte fracionaria em 6 digitos; `fallback` se vazio.
 let parseNum = fn (l, fallback) => {
   let l1  = if (isNil(l)) { l } else { if (hd(l) == 34) { tl(l) } else { l } };
   let neg = if (isNil(l1)) { 0 } else { if (hd(l1) == 45) { 1 } else { 0 } };
@@ -125,6 +60,7 @@ let parseNum = fn (l, fallback) => {
     if (neg == 1) { 0 - mag } else { mag }
   }
 };
+// digitsAll: concatena todos os digitos de `l` num inteiro
 let digitsAll = fn (l, acc) => {
   if (isNil(l)) { acc }
   else { let c = hd(l);
@@ -132,28 +68,7 @@ let digitsAll = fn (l, acc) => {
     else { acc } }
 };
 
-// ---- acesso a campos JSON --------------------------------------------------
-// valueAfter: dado o nome de chave `key`, devolve a lista posicionada no valor
-//             (apos `:` e espacos), ou nil se a chave nao existir
-let valueAfter = fn (region, key) => {
-  let after = findAfter(region, key);
-  if (isNil(after)) { nil }
-  else { let c = dropUntil(58, after);
-    if (isNil(c)) { nil } else { skipWs(tl(c)) } }
-};
-let getNum = fn (region, key, fallback) => {
-  let v = valueAfter(region, key);
-  if (isNil(v)) { fallback } else { parseNum(v, fallback) }
-};
-let getBool = fn (region, key, fallback) => {
-  let v = valueAfter(region, key);
-  if (isNil(v)) { fallback } else { if (hd(v) == 116) { 1 } else { 0 } }
-};
-let getStr = fn (region, key) => {
-  let v = valueAfter(region, key);
-  if (isNil(v)) { nil } else { if (hd(v) == 34) { takeUntil(34, tl(v)) } else { nil } }
-};
-
+// ---- acesso a campos JSON (sobre strings cruas) ----------------------------
 let regionAfterS = fn (body, key) => {
   let pos = str_index(body, key);
   if (pos < 0) { body } else { str_drop(body, pos + str_len(key)) }
@@ -176,26 +91,24 @@ let getStrS = fn (region, key) => {
   let v = valueAfterS(region, key);
   if (str_len(v) == 0) { "" } else { str_take_until(str_drop(v, 1), 34) }
 };
-
-// ---- aritmetica de apoio ---------------------------------------------------
-let mx    = fn (a, b) => { if (a > b) { a } else { b } };
-let mx0   = fn (x)    => { if (x < 0) { 0 } else { x } };
-let clamp = fn (v)    => { if (v < 0) { 0 } else { if (v > 4096) { 4096 } else { v } } };
-
-// mccRisk: risco do MCC em escala 4096 (= risco_float * 4096), default 0.50
-let mccRisk = fn (code) => {
-  if (code == 5411) { 614  } else {
-  if (code == 5812) { 1229 } else {
-  if (code == 5912) { 819  } else {
-  if (code == 5944) { 1843 } else {
-  if (code == 7801) { 3277 } else {
-  if (code == 7802) { 3072 } else {
-  if (code == 7995) { 3482 } else {
-  if (code == 4511) { 1434 } else {
-  if (code == 5311) { 1024 } else {
-  if (code == 5999) { 2048 } else { 2048 } } } } } } } } } }
+let getBoolS = fn (region, key) => {
+  let v = valueAfterS(region, key);
+  if (str_len(v) == 0) { 0 }
+  else { if (str_index(v, "true") == 0) { 1 } else { 0 } }
 };
 
+// ---- char/digito (sobre listas de str_chars) -------------------------------
+let charAt  = fn (l, i) => {
+  if (isNil(l)) { 0 } else { if (i == 0) { hd(l) } else { charAt(tl(l), i - 1) } }
+};
+let digit1  = fn (c) => { if (c >= 48) { if (c <= 57) { c - 48 } else { 0 } } else { 0 } };
+let digitAt = fn (l, i) => { digit1(charAt(l, i)) };
+let int2 = fn (l, i) => { digitAt(l, i) * 10 + digitAt(l, i + 1) };
+let int4 = fn (l, i) => {
+  digitAt(l, i) * 1000 + digitAt(l, i + 1) * 100 + digitAt(l, i + 2) * 10 + digitAt(l, i + 3)
+};
+
+// ---- datas -----------------------------------------------------------------
 // daysFromCivil: dias desde 1970-01-01 (algoritmo de Howard Hinnant)
 let daysFromCivil = fn (y0, m, d) => {
   let y   = if (m < 3) { y0 - 1 } else { y0 };
@@ -206,85 +119,43 @@ let daysFromCivil = fn (y0, m, d) => {
   let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
   era * 146097 + doe - 719468
 };
-// isoSeconds: segundos epoch de um timestamp ISO "YYYY-MM-DDTHH:MM:SS..."
-let isoSeconds = fn (l) => {
-  daysFromCivil(int4(l, 0), int2(l, 5), int2(l, 8)) * 86400
-    + int2(l, 11) * 3600 + int2(l, 14) * 60 + int2(l, 17)
+
+// ---- vetorizacao -----------------------------------------------------------
+// qd: normaliza e quantiza. valor = num/denom em [0,1]; devolve
+//     round(clamp(valor) * 32767) com arredondamento "half up".
+let qd = fn (num, denom) => {
+  if (num <= 0) { 0 }
+  else { if (num >= denom) { 32767 }
+    else { (num * 65534 + denom) / (denom * 2) } }
+};
+// mccQ: risco do MCC ja quantizado (= round(risco * 32767)), default 0.50.
+let mccQ = fn (code) => {
+  if (code == 5411) { 4915  } else {
+  if (code == 5812) { 9830  } else {
+  if (code == 5912) { 6553  } else {
+  if (code == 5944) { 14745 } else {
+  if (code == 7801) { 26214 } else {
+  if (code == 7802) { 24575 } else {
+  if (code == 7995) { 27852 } else {
+  if (code == 4511) { 11468 } else {
+  if (code == 5311) { 8192  } else {
+  if (code == 5999) { 16384 } else { 16384 } } } } } } } } } }
 };
 
-// ---- scoreOf: corpo JSON cru (string) -> voto de fraude 0 ou 5 --------------
-let scoreOf = fn (body) => {
-  if (str_len(body) == 0) { 5 }
-  else {
-    let custR  = regionAfterS(body, kCustomer);
-    let merchR = regionAfterS(body, kMerchant);
+// sumList: soma os elementos de uma lista Rinha (os 5 rotulos do kNN)
+let sumList = fn (l) => { if (isNil(l)) { 0 } else { hd(l) + sumList(tl(l)) } };
 
-    let merchId  = getStrS(merchR, kId);
-    let knownArr = str_take_until(valueAfterS(custR, kKnownMerchants), 93);
-    let unknownV = if (str_len(merchId) == 0) { 1 }
-      else { if (str_contains(knownArr, merchId) == 1) { 0 } else { 1 } };
-
-    if (unknownV == 1) { 5 }
-    else {
-      let mccCode   = digitsAll(str_chars(getStrS(merchR, kMcc)), 0);
-      let highMcc = if (mccCode == 7801) { 1 } else {
-        if (mccCode == 7802) { 1 } else {
-        if (mccCode == 7995) { 1 } else { 0 } } };
-
-      if (highMcc == 1) { 5 }
-      else {
-        let txR     = regionAfterS(body, kTransaction);
-        let termR   = regionAfterS(body, kTerminal);
-        let amountMi = getNumS(txR, kAmount, 0);
-        if (amountMi < 1) { 5 }
-        else {
-          let instMi    = getNumS(txR, kInstallments, 1000000);
-          let txCountMi = getNumS(custR, kTxCount, 0);
-          let kmHomeMi  = getNumS(termR, kKmHome, 0);
-
-          let fraud = if (amountMi > 1500000000) { 1 } else {
-            if (kmHomeMi > 50000000) { 1 } else {
-            if (txCountMi > 5000000) { 1 } else {
-            if (instMi > 5000000) { 1 } else { 0 } } } };
-
-          if (fraud == 1) { 5 } else { 0 }
-        }
-      }
-    }
-  }
+// ---- classify: corpo JSON cru -> contagem de fraudes nos 5 vizinhos (0..5) --
+let classify = fn (body) => {
+  fraud_count_json(body)
 };
 
 // ---- parsing da request HTTP -----------------------------------------------
-// findSeq: indice (base 0) onde `seq` comeca em `l`, ou -1 se ausente
-let findSeq = fn (l, seq, i) => {
-  if (isNil(l)) { 0 - 1 }
-  else { let m = matchPrefix(l, seq);
-    if (m.ok == 1) { i } else { findSeq(tl(l), seq, i + 1) } }
-};
 // parseRequest: devolve record { st, method, path, body, rest }
 //   st = 0 invalida ; 1 completa ; 2 precisa de mais bytes
-// Como a resposta fecha a conexao, o corpo e simplesmente tudo apos CRLFCRLF.
 let parseRequest = fn (buf) => {
-  let bufLen = str_len(buf);
-  if (bufLen > 262144) { record { st: 0 } }
-  else {
-    let he    = str_index(buf, crlf2);
-    if (he < 0) { record { st: 2 } }
-    else {
-      let bodyStart = he + 4;
-      let firstLine = str_take_until(buf, 13);
-      let method    = str_take_until(firstLine, 32);
-      let afterM    = str_drop(firstLine, str_len(method) + 1);
-      let path      = str_take_until(afterM, 32);
-      record {
-        st: 1,
-        method: method,
-        path: path,
-        body: str_drop(buf, bodyStart),
-        rest: ""
-      }
-    }
-  }
+  if (str_len(buf) > 262144) { record { st: 0 } }
+  else { http_parse_request(buf) }
 };
 // readReq: acumula bytes do socket ate ter uma request completa
 let readReq = fn (fd, buf) => {
@@ -292,7 +163,7 @@ let readReq = fn (fd, buf) => {
   if (p.st == 1) { p }
   else { if (p.st == 0) { record { st: 0 } }
     else {
-      let more = net_recv(fd, 65536);
+      let more = net_recv(fd, 8192);
       if (str_len(more) == 0) { record { st: 0 } }
       else { readReq(fd, buf + more) }
     } }
@@ -311,7 +182,7 @@ let route = fn (method, path, body) => {
     if (path == pReady) { respReady } else { resp404 }
   } else {
     if (method == mPOST) {
-      if (path == pFraud) { respScore(scoreOf(body)) }
+      if (path == pFraud) { respScore(classify(body)) }
       else { respScore(5) }
     } else { resp404 }
   }
@@ -326,9 +197,8 @@ let serveConn = fn (fd, carry) => {
   }
 };
 
-// ---- constantes de bytes (chaves JSON, metodos, rotas, sequencias) ---------
+// ---- constantes (chaves JSON, metodos, rotas, sequencias) ------------------
 let crlf2       = crlf + crlf;
-let kContentLen = "content-length:";
 
 let kTransaction     = q + "transaction" + q;
 let kCustomer        = q + "customer" + q;
@@ -343,7 +213,6 @@ let kIsOnline        = q + "is_online" + q;
 let kCardPresent     = q + "card_present" + q;
 let kMcc             = q + "mcc" + q;
 let kRequestedAt     = q + "requested_at" + q;
-let kLastTransaction = q + "last_transaction" + q;
 let kTimestamp       = q + "timestamp" + q;
 let kKmCurrent       = q + "km_from_current" + q;
 let kId              = q + "id" + q;
@@ -379,7 +248,15 @@ let resp4 = mkResp("200 OK", bScore("false", "0.8"));
 let resp5 = mkResp("200 OK", bScore("false", "1.0"));
 
 // ---- boot ------------------------------------------------------------------
-let addr          = env("API_ADDR", "0.0.0.0:8080");
-let listener      = net_listen_addr(addr);
-let boot          = print("rinha api (full rinha) em " + addr);
-net_serve(listener, fn (cli) => { serveConn(cli, "") })
+let addr     = env("API_ADDR", "0.0.0.0:8080");
+let fdAddr   = env("API_FD_SOCKET", "");
+let warm     = ivf_warmup();
+if (str_len(fdAddr) > 0) {
+  let listener = net_fd_listen(fdAddr);
+  let boot     = print("rinha api (fd) em " + fdAddr);
+  net_fd_serve(listener, fn (cli) => { serveConn(cli, "") })
+} else {
+  let listener = net_listen_addr(addr);
+  let boot     = print("rinha api (tcp) em " + addr);
+  net_serve(listener, fn (cli) => { serveConn(cli, "") })
+}

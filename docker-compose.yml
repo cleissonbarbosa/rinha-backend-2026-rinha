@@ -7,20 +7,23 @@ services:
     platform: linux/amd64
     environment:
       API_ADDR: 0.0.0.0:8080
+      API_FD_SOCKET: /sockets/api1.sock
       RESOURCES_DIR: /app/resources
       KNN_CANDIDATES: "128"
       RINHA_PROBE: "3"
-      RINHA_NET_MAX_THREADS: "256"
+      RINHA_NET_MAX_THREADS: "512"
     ulimits:
       nofile:
         soft: 65535
         hard: 65535
     expose:
       - "8080"
+    volumes:
+      - sockets:/sockets
     networks:
       - rinha
-    cpus: 0.425
-    mem_limit: 160m
+    cpus: 0.47
+    mem_limit: 150m
     restart: unless-stopped
 
   api2:
@@ -31,20 +34,23 @@ services:
     platform: linux/amd64
     environment:
       API_ADDR: 0.0.0.0:8080
+      API_FD_SOCKET: /sockets/api2.sock
       RESOURCES_DIR: /app/resources
       KNN_CANDIDATES: "128"
       RINHA_PROBE: "3"
-      RINHA_NET_MAX_THREADS: "256"
+      RINHA_NET_MAX_THREADS: "512"
     ulimits:
       nofile:
         soft: 65535
         hard: 65535
     expose:
       - "8080"
+    volumes:
+      - sockets:/sockets
     networks:
       - rinha
-    cpus: 0.425
-    mem_limit: 160m
+    cpus: 0.47
+    mem_limit: 150m
     restart: unless-stopped
 
   lb:
@@ -57,7 +63,9 @@ services:
       LB_ADDR: 0.0.0.0:9999
       BACKEND1: api1:8080
       BACKEND2: api2:8080
-      RINHA_NET_MAX_THREADS: "256"
+      FD_BACKEND1: /sockets/api1.sock
+      FD_BACKEND2: /sockets/api2.sock
+      RINHA_NET_MAX_THREADS: "512"
     ulimits:
       nofile:
         soft: 65535
@@ -67,12 +75,22 @@ services:
     depends_on:
       - api1
       - api2
+    volumes:
+      - sockets:/sockets
     networks:
       - rinha
-    cpus: 0.15
-    mem_limit: 30m
+    cpus: 0.06
+    mem_limit: 40m
     restart: unless-stopped
 
 networks:
   rinha:
     driver: bridge
+
+volumes:
+  sockets:
+    driver: local
+    driver_opts:
+      type: tmpfs
+      device: tmpfs
+      o: size=10m

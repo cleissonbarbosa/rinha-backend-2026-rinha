@@ -15,7 +15,9 @@ RUN chmod +x /app/rinha-interp
 ENV LB_ADDR=0.0.0.0:9999 \
     BACKEND1=api1:8080 \
     BACKEND2=api2:8080 \
-    RINHA_NET_MAX_THREADS=256
+    RINHA_NET_MAX_THREADS=512
 
 EXPOSE 9999
-ENTRYPOINT ["/app/rinha-interp", "+RTS", "-N1", "-A128k", "-F1.1", "-RTS", "/app/lb.json"]
+# net_proxy faz o relay em codigo nativo: o interpretador so roda handleClient
+# uma vez por conexao, entao o LB quase nao aloca - nursery menor basta.
+ENTRYPOINT ["/app/rinha-interp", "+RTS", "-N1", "-A4m", "-I0", "-RTS", "/app/lb.json"]

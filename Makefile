@@ -16,14 +16,17 @@ rinha-check:
 	$(RINHA_AST_BIN) rinha/lb.rinha > $(BUILD)/lb.json
 	rm -rf $(BUILD)/compiler-src
 	cd $(RINHA_INTERPRETER_DIR) && $(RINHA_STACK) --allow-different-user --no-system-ghc --install-ghc build --copy-bins --local-bin-path $(abspath $(BUILD))
-	cp $(BUILD)/rinha-compiladores $(RINHA_RUNTIME_BIN)
-	chmod +x $(RINHA_RUNTIME_BIN)
+	rm -f $(RINHA_RUNTIME_BIN).tmp
+	cp $(BUILD)/rinha-compiladores $(RINHA_RUNTIME_BIN).tmp
+	chmod +x $(RINHA_RUNTIME_BIN).tmp
+	mv -f $(RINHA_RUNTIME_BIN).tmp $(RINHA_RUNTIME_BIN)
 	@echo "ok: server.rinha e lb.rinha parseiam"
 
 build: rinha-check
 	docker compose build --no-cache
 
 up: rinha-check
+	docker compose rm -sf api1 api2 lb >/dev/null 2>&1 || true
 	docker compose up --build -d
 
 down:
