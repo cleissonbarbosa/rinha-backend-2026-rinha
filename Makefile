@@ -4,7 +4,7 @@ RINHA_AST_BIN ?= $(RINHA_INTERPRETER_DIR)/lib/bin/rinha
 RINHA_STACK ?= stack
 RINHA_RUNTIME_BIN ?= $(BUILD)/rinha-interp
 
-.PHONY: all rinha-check up down build smoke test official-smoke official-test clean
+.PHONY: all rinha-check up wait-ready down build smoke test official-smoke official-test clean
 
 # checagem rapida: os programas Rinha parseiam para AST JSON oficial
 all: rinha-check
@@ -28,6 +28,21 @@ build: rinha-check
 up: rinha-check
 	docker compose rm -sf api1 api2 lb >/dev/null 2>&1 || true
 	docker compose up --build -d
+	$(MAKE) wait-ready
+
+wait-ready:
+	@i=1; \
+	while [ $$i -le 40 ]; do \
+	  if curl -fs http://localhost:9999/ready >/dev/null 2>&1; then \
+	    echo "ok: /ready"; \
+	    exit 0; \
+	  fi; \
+	  sleep 3; \
+	  i=$$((i + 1)); \
+	done; \
+	echo "erro: servico nao ficou pronto"; \
+	docker compose logs --tail=80; \
+	exit 1
 
 down:
 	docker compose down --remove-orphans

@@ -11,6 +11,7 @@ services:
       RESOURCES_DIR: /app/resources
       KNN_CANDIDATES: "128"
       RINHA_PROBE: "3"
+      RINHA_RESIDUAL_REFINE: "1"
       RINHA_NET_MAX_THREADS: "512"
     ulimits:
       nofile:
@@ -22,7 +23,7 @@ services:
       - sockets:/sockets
     networks:
       - rinha
-    cpus: 0.47
+    cpus: 0.485
     mem_limit: 150m
     restart: unless-stopped
 
@@ -38,6 +39,7 @@ services:
       RESOURCES_DIR: /app/resources
       KNN_CANDIDATES: "128"
       RINHA_PROBE: "3"
+      RINHA_RESIDUAL_REFINE: "1"
       RINHA_NET_MAX_THREADS: "512"
     ulimits:
       nofile:
@@ -49,7 +51,7 @@ services:
       - sockets:/sockets
     networks:
       - rinha
-    cpus: 0.47
+    cpus: 0.485
     mem_limit: 150m
     restart: unless-stopped
 
@@ -79,7 +81,7 @@ services:
       - sockets:/sockets
     networks:
       - rinha
-    cpus: 0.06
+    cpus: 0.03
     mem_limit: 40m
     restart: unless-stopped
 
