@@ -3,3 +3,11 @@ build/
 resources/*.bin
 rinha-*/
 *.log
+docs/
+resources/
+rinha/
+scripts/
+.dockerignore
+Dockerfile*
+Makefile
+README*
