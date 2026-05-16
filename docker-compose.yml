@@ -1,12 +1,12 @@
 services:
   api1:
-    image: cleissonb/rinha-backend-2026-rinha-api:latest
+    image: cleissonb/rinha-backend-2026-rinha-api:v0.0.4
     platform: linux/amd64
     environment:
       API_ADDR: 0.0.0.0:8080
       API_FD_SOCKET: /sockets/api1.sock
-      RINHA_INDEX_PATH: /app/index/rinha-specialist.idx
-      RINHA_SEARCH_MODE: key-first
+      RESOURCES_DIR: /app/resources
+      RINHA_SEARCH_MODE: keyfirst
       RINHA_NET_MAX_THREADS: "512"
     ulimits:
       nofile:
@@ -18,18 +18,18 @@ services:
       - sockets:/sockets
     networks:
       - rinha
-    cpus: 0.42
-    mem_limit: 165m
+    cpus: 0.485
+    mem_limit: 150m
     restart: unless-stopped
 
   api2:
-    image: cleissonb/rinha-backend-2026-rinha-api:latest
+    image: cleissonb/rinha-backend-2026-rinha-api:v0.0.4
     platform: linux/amd64
     environment:
       API_ADDR: 0.0.0.0:8080
       API_FD_SOCKET: /sockets/api2.sock
-      RINHA_INDEX_PATH: /app/index/rinha-specialist.idx
-      RINHA_SEARCH_MODE: key-first
+      RESOURCES_DIR: /app/resources
+      RINHA_SEARCH_MODE: keyfirst
       RINHA_NET_MAX_THREADS: "512"
     ulimits:
       nofile:
@@ -41,21 +41,20 @@ services:
       - sockets:/sockets
     networks:
       - rinha
-    cpus: 0.42
-    mem_limit: 165m
+    cpus: 0.485
+    mem_limit: 150m
     restart: unless-stopped
 
   lb:
-    image: cleissonb/rinha-backend-2026-rinha-lb:latest
+    image: cleissonb/rinha-backend-2026-rinha-lb:v0.0.4
     platform: linux/amd64
     environment:
-      LB_ADDR: 0.0.0.0
-      LB_PORT: "9999"
+      LB_ADDR: 0.0.0.0:9999
       BACKEND1: api1:8080
       BACKEND2: api2:8080
       FD_BACKEND1: /sockets/api1.sock
       FD_BACKEND2: /sockets/api2.sock
-      WORKERS: "2"
+      RINHA_NET_MAX_THREADS: "512"
     ulimits:
       nofile:
         soft: 65535
@@ -69,8 +68,8 @@ services:
       - sockets:/sockets
     networks:
       - rinha
-    cpus: 0.16
-    mem_limit: 20m
+    cpus: 0.03
+    mem_limit: 40m
     restart: unless-stopped
 
 networks:
