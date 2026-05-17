@@ -18,7 +18,7 @@ services:
       - sockets:/sockets
     networks:
       - rinha
-    cpus: 0.485
+    cpus: 0.42
     mem_limit: 150m
     restart: unless-stopped
 
@@ -41,7 +41,7 @@ services:
       - sockets:/sockets
     networks:
       - rinha
-    cpus: 0.485
+    cpus: 0.42
     mem_limit: 150m
     restart: unless-stopped
 
@@ -68,7 +68,7 @@ services:
       - sockets:/sockets
     networks:
       - rinha
-    cpus: 0.03
+    cpus: 0.16
     mem_limit: 40m
     restart: unless-stopped
 
