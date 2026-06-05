@@ -1,6 +1,6 @@
 services:
   api1:
-    image: cleissonb/rinha-backend-2026-rinha-api:v0.0.6
+    image: cleissonb/rinha-backend-2026-rinha-api:v0.0.7
     platform: linux/amd64
     environment:
       API_ADDR: 0.0.0.0:8080
@@ -8,6 +8,8 @@ services:
       RESOURCES_DIR: /app/resources
       RINHA_SEARCH_MODE: keyfirst
       RINHA_NET_MAX_THREADS: "512"
+      RINHA_RTS: ${RINHA_RTS:--N2 -A24m -I0 -ki4k --nonmoving-gc}
+      RINHA_EARLY_DISTANCE_MILLI: ${EARLY:-140}
     ulimits:
       nofile:
         soft: 65535
@@ -23,7 +25,7 @@ services:
     restart: unless-stopped
 
   api2:
-    image: cleissonb/rinha-backend-2026-rinha-api:v0.0.6
+    image: cleissonb/rinha-backend-2026-rinha-api:v0.0.7
     platform: linux/amd64
     environment:
       API_ADDR: 0.0.0.0:8080
@@ -31,6 +33,8 @@ services:
       RESOURCES_DIR: /app/resources
       RINHA_SEARCH_MODE: keyfirst
       RINHA_NET_MAX_THREADS: "512"
+      RINHA_RTS: ${RINHA_RTS:--N2 -A24m -I0 -ki4k --nonmoving-gc}
+      RINHA_EARLY_DISTANCE_MILLI: ${EARLY:-140}
     ulimits:
       nofile:
         soft: 65535
@@ -46,7 +50,7 @@ services:
     restart: unless-stopped
 
   lb:
-    image: cleissonb/rinha-backend-2026-rinha-lb:v0.0.6
+    image: cleissonb/rinha-backend-2026-rinha-lb:v0.0.7
     platform: linux/amd64
     environment:
       LB_ADDR: 0.0.0.0:9999
